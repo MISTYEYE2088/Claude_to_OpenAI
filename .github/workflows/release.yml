@@ -206,13 +206,28 @@ jobs:
           export OPENAI_API_KEY="dummy"
           "./dist/${{ matrix.binary_name }}" > proxy.log 2>&1 &
           PROXY_PID=$!
-          export PROXY_PID
+
+          dump_logs() {
+            if [ -f fake-upstream.log ]; then
+              echo "--- fake-upstream.log ---"
+              cat fake-upstream.log
+            fi
+            if [ -f proxy.log ]; then
+              echo "--- proxy.log ---"
+              cat proxy.log
+            fi
+          }
 
           cleanup() {
             kill "$PROXY_PID" "$FAKE_UPSTREAM_PID" 2>/dev/null || true
             wait "$PROXY_PID" "$FAKE_UPSTREAM_PID" 2>/dev/null || true
           }
-          trap cleanup EXIT
+
+          on_exit() {
+            dump_logs
+            cleanup
+          }
+          trap on_exit EXIT
 
           python - <<'PY'
           import json
@@ -242,63 +257,42 @@ jobs:
 
           python - <<'PY'
           import json
-          import os
           import time
-          import urllib.request
           import urllib.error
-
-          def process_alive(pid: int) -> bool:
-              import os
-              try:
-                  os.kill(pid, 0)
-              except OSError:
-                  return False
-              return True
+          import urllib.request
 
           ready_url = "http://127.0.0.1:8181/ready"
           deadline = time.time() + 30
           last_status = None
-          last_body = None
-          proxy_pid = int(os.environ["PROXY_PID"])
+          last_error = None
           while time.time() < deadline:
-              if not process_alive(proxy_pid):
-                  raise SystemExit(
-                      "Proxy process exited before readiness check"
-                  )
               try:
                   with urllib.request.urlopen(ready_url, timeout=2) as response:
                       if response.status == 200:
                           payload = json.loads(response.read().decode("utf-8"))
                           if (
                               isinstance(payload, dict)
-                              and payload.get("status")
+                                  and payload.get("status")
                           ):
                               break
+                      last_status = response.status
+                      last_error = f"unexpected payload: {payload!r}"
               except urllib.error.HTTPError as exc:
                   last_status = exc.code
                   try:
-                      last_body = exc.read().decode("utf-8")
+                      last_error = exc.read().decode("utf-8")
                   except Exception:
-                      last_body = None
+                      last_error = repr(exc)
               except Exception:
                   last_status = None
-                  last_body = None
+                  last_error = "request exception"
               time.sleep(0.5)
           else:
-              details = f"status={last_status} body={last_body!r}"
+              details = f"status={last_status} detail={last_error!r}"
               raise SystemExit(
                   "Proxy failed readiness check at /ready (" + details + ")"
               )
           PY
-
-          if [ -f fake-upstream.log ]; then
-            echo "--- fake-upstream.log ---"
-            cat fake-upstream.log
-          fi
-          if [ -f proxy.log ]; then
-            echo "--- proxy.log ---"
-            cat proxy.log
-          fi
 
           python scripts/compat_check.py \
             --base-url http://127.0.0.1:8181
