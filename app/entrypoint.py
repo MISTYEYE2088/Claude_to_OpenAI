@@ -7,6 +7,7 @@ from pathlib import Path
 import uvicorn
 
 from app.config import load_settings
+from app.main import app
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -21,7 +22,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.config and not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
     settings = load_settings(config_path=config_path)
-    uvicorn.run("app.main:app", host=settings.host, port=settings.port)
+    uvicorn.run(app, host=settings.host, port=settings.port)
     return 0
 
 

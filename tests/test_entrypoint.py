@@ -21,6 +21,7 @@ def _write_config(path: Path, **overrides: object) -> None:
 
 def test_main_passes_cli_config_path_to_settings_loader(monkeypatch, tmp_path: Path):
     from app import entrypoint
+    from app.main import app as fastapi_app
 
     explicit_path = tmp_path / "custom" / "settings.json"
     _write_config(explicit_path)
@@ -48,7 +49,7 @@ def test_main_passes_cli_config_path_to_settings_loader(monkeypatch, tmp_path: P
 
     assert result == 0
     assert calls["config_path"] == explicit_path
-    assert calls["app_target"] == "app.main:app"
+    assert calls["app_target"] is fastapi_app
     assert calls["host"] == "127.0.0.1"
     assert calls["port"] == 8181
 
@@ -58,6 +59,7 @@ def test_main_without_config_uses_cwd_config_resolution_in_source_mode(
     tmp_path: Path,
 ):
     from app import entrypoint
+    from app.main import app as fastapi_app
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.chdir(tmp_path)
@@ -75,13 +77,14 @@ def test_main_without_config_uses_cwd_config_resolution_in_source_mode(
     result = entrypoint.main([])
 
     assert result == 0
-    assert calls["app_target"] == "app.main:app"
+    assert calls["app_target"] is fastapi_app
     assert calls["host"] == "0.0.0.0"
     assert calls["port"] == 9191
 
 
 def test_main_starts_uvicorn_with_resolved_host_port(monkeypatch):
     from app import entrypoint
+    from app.main import app as fastapi_app
 
     calls: dict[str, object] = {}
 
@@ -107,7 +110,7 @@ def test_main_starts_uvicorn_with_resolved_host_port(monkeypatch):
 
     assert result == 0
     assert calls["config_path"] is None
-    assert calls["app_target"] == "app.main:app"
+    assert calls["app_target"] is fastapi_app
     assert calls["host"] == "1.2.3.4"
     assert calls["port"] == 4321
 
