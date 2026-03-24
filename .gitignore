@@ -10,3 +10,4 @@ config/config.json
 .env
 .env.*
 !.env.example
+uv.lock

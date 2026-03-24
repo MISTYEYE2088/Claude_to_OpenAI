@@ -10,7 +10,32 @@ permissions:
   contents: write
 
 jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install gitleaks
+        run: |
+          GITLEAKS_VERSION="8.24.2"
+          GITLEAKS_TARBALL="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          GITLEAKS_URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${GITLEAKS_TARBALL}"
+          curl -sSL \
+            "$GITLEAKS_URL" \
+            -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Run gitleaks working tree scan
+        run: gitleaks detect --source . --no-banner
+
+      - name: Run gitleaks git history scan
+        run: gitleaks git --no-banner
+
   build-and-release:
+    needs: security-scan
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -45,8 +70,139 @@ jobs:
           pyinstaller --onefile --name openai-to-claude-proxy
           app/entrypoint.py
 
+      - name: Verify compatibility against built binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          Path("config").mkdir(parents=True, exist_ok=True)
+          config = {
+              "openai_api_key_env": "OPENAI_API_KEY",
+              "upstream_openai_base_url": "http://127.0.0.1:18080/v1",
+              "default_model": "gpt-5.3-codex",
+              "host": "127.0.0.1",
+              "port": 8181,
+          }
+          Path("config/config.json").write_text(
+              json.dumps(config, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+
+          python - <<'PY' > fake-upstream.log 2>&1 &
+          import json
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          class Handler(BaseHTTPRequestHandler):
+              def _respond(self, status, payload):
+                  body = json.dumps(payload).encode("utf-8")
+                  self.send_response(status)
+                  self.send_header("Content-Type", "application/json")
+                  self.send_header("Content-Length", str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+
+              def do_GET(self):
+                  if self.path == "/v1/models":
+                      self._respond(
+                          200,
+                          {
+                              "object": "list",
+                              "data": [
+                                  {
+                                      "id": "gpt-5.3-codex",
+                                      "object": "model",
+                                      "owned_by": "compat-fake",
+                                  }
+                              ],
+                          },
+                      )
+                      return
+                  self._respond(404, {"error": "not found"})
+
+              def do_POST(self):
+                  if self.path == "/v1/chat/completions":
+                      _ = self.rfile.read(
+                          int(self.headers.get("Content-Length", "0"))
+                      )
+                      self._respond(
+                          200,
+                          {
+                              "id": "chatcmpl-compat",
+                              "object": "chat.completion",
+                              "created": 0,
+                              "model": "gpt-5.3-codex",
+                              "choices": [
+                                  {
+                                      "index": 0,
+                                      "message": {
+                                          "role": "assistant",
+                                          "content": "compat-ok",
+                                      },
+                                      "finish_reason": "stop",
+                                  }
+                              ],
+                              "usage": {
+                                  "prompt_tokens": 5,
+                                  "completion_tokens": 2,
+                                  "total_tokens": 7,
+                              },
+                          },
+                      )
+                      return
+                  self._respond(404, {"error": "not found"})
+
+              def log_message(self, format, *args):
+                  return
+
+          HTTPServer(("127.0.0.1", 18080), Handler).serve_forever()
+          PY
+          FAKE_UPSTREAM_PID=$!
+
+          export OPENAI_API_KEY="dummy"
+          "./dist/${{ matrix.binary_name }}" > proxy.log 2>&1 &
+          PROXY_PID=$!
+
+          cleanup() {
+            kill "$PROXY_PID" "$FAKE_UPSTREAM_PID" 2>/dev/null || true
+            wait "$PROXY_PID" "$FAKE_UPSTREAM_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          python - <<'PY'
+          import json
+          import time
+          import urllib.request
+
+          ready_url = "http://127.0.0.1:8181/ready"
+          deadline = time.time() + 30
+          while time.time() < deadline:
+              try:
+                  with urllib.request.urlopen(ready_url, timeout=2) as response:
+                      if response.status == 200:
+                          payload = json.loads(response.read().decode("utf-8"))
+                          if (
+                              isinstance(payload, dict)
+                              and payload.get("status")
+                          ):
+                              break
+              except Exception:
+                  pass
+              time.sleep(0.5)
+          else:
+              raise SystemExit("Proxy failed readiness check at /ready")
+          PY
+
+          python scripts/compat_check.py --base-url http://127.0.0.1:8181
+
       - name: Package release artifacts
-        run: python scripts/package_release.py --version "${{ github.ref_name }}" --platform "${{ matrix.platform }}" --binary-path "dist/${{ matrix.binary_name }}"
+        run: >-
+          python scripts/package_release.py --version "${{ github.ref_name }}"
+          --platform "${{ matrix.platform }}" --binary-path
+          "dist/${{ matrix.binary_name }}"
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
