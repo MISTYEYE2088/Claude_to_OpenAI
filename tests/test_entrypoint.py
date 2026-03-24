@@ -23,6 +23,7 @@ def test_main_passes_cli_config_path_to_settings_loader(monkeypatch, tmp_path: P
     from app import entrypoint
 
     explicit_path = tmp_path / "custom" / "settings.json"
+    _write_config(explicit_path)
     calls: dict[str, object] = {}
 
     def fake_load_settings(*, config_path=None):
@@ -109,3 +110,44 @@ def test_main_starts_uvicorn_with_resolved_host_port(monkeypatch):
     assert calls["app_target"] == "app.main:app"
     assert calls["host"] == "1.2.3.4"
     assert calls["port"] == 4321
+
+
+def test_main_with_missing_explicit_config_path_fails_fast(monkeypatch, tmp_path: Path):
+    from app import entrypoint
+
+    explicit_path = tmp_path / "does-not-exist.json"
+    calls: dict[str, object] = {}
+
+    def fake_uvicorn_run(app_target: str, *, host: str, port: int):
+        calls["called"] = True
+
+    monkeypatch.setattr(entrypoint.uvicorn, "run", fake_uvicorn_run)
+
+    try:
+        entrypoint.main(["--config", str(explicit_path)])
+        assert False, "expected FileNotFoundError"
+    except FileNotFoundError as exc:
+        assert str(explicit_path) in str(exc)
+
+    assert calls.get("called") is None
+
+
+def test_main_with_config_flag_but_missing_value_exits_without_starting_server(
+    monkeypatch,
+):
+    from app import entrypoint
+
+    calls: dict[str, object] = {}
+
+    def fake_uvicorn_run(app_target: str, *, host: str, port: int):
+        calls["called"] = True
+
+    monkeypatch.setattr(entrypoint.uvicorn, "run", fake_uvicorn_run)
+
+    try:
+        entrypoint.main(["--config"])
+        assert False, "expected argparse SystemExit for missing value"
+    except SystemExit as exc:
+        assert exc.code == 2
+
+    assert calls.get("called") is None
