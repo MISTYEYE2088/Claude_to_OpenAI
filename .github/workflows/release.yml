@@ -1,0 +1,60 @@
+---
+name: Release
+
+"on":
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            binary_name: openai-to-claude-proxy
+          - os: windows-latest
+            platform: windows
+            binary_name: openai-to-claude-proxy.exe
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pyinstaller
+
+      - name: Run tests
+        run: python -m pytest -v -k "not live_image"
+
+      - name: Build binary
+        run: >-
+          pyinstaller --onefile --name openai-to-claude-proxy
+          app/entrypoint.py
+
+      - name: Package release artifacts
+        run: |
+          python scripts/package_release.py \
+            --version "${{ github.ref_name }}" \
+            --platform "${{ matrix.platform }}" \
+            --binary-path "dist/${{ matrix.binary_name }}"
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*-${{ github.ref_name }}-${{ matrix.platform }}-x86_64.*
+          fail_on_unmatched_files: true
