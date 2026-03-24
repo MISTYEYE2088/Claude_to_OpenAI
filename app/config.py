@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
-DEFAULT_UPSTREAM_OPENAI_BASE_URL = "https://us.12888888.xyz:8317/v1"
+DEFAULT_UPSTREAM_OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 
 @dataclass(frozen=True)

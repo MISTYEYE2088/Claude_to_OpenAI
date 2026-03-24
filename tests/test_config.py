@@ -229,3 +229,7 @@ def test_load_settings_defaults_to_existing_non_secret_defaults(
     assert settings.default_model is None
     assert settings.host == "127.0.0.1"
     assert settings.port == 8181
+
+
+def test_default_upstream_base_url_is_public_safe_default() -> None:
+    assert DEFAULT_UPSTREAM_OPENAI_BASE_URL == "https://api.openai.com/v1"

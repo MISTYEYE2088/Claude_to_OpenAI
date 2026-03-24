@@ -1,6 +1,6 @@
 {
   "openai_api_key_env": "OPENAI_API_KEY",
-  "upstream_openai_base_url": "https://us.12888888.xyz:8317/v1",
+  "upstream_openai_base_url": "https://api.openai.com/v1",
   "default_model": "gpt-5.3-codex",
   "host": "127.0.0.1",
   "port": 8181
