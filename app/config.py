@@ -47,6 +47,17 @@ def _parse_default_model(raw_model: str | None) -> str | None:
     return normalized
 
 
+def _parse_host(raw_host: str) -> str:
+    if not isinstance(raw_host, str):
+        raise ValueError("host must be a non-empty string")
+
+    normalized = raw_host.strip()
+    if not normalized:
+        raise ValueError("host must be a non-empty string")
+
+    return normalized
+
+
 def _parse_upstream_openai_base_url(raw_url: str) -> str:
     normalized = raw_url.strip()
     parsed = urlparse(normalized)
@@ -154,6 +165,6 @@ def load_settings(
             upstream_openai_base_url
         ),
         default_model=_parse_default_model(default_model),
-        host=host,
+        host=_parse_host(host),
         port=_parse_port(raw_port),
     )

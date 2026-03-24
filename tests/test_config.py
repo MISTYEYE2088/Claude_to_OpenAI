@@ -101,6 +101,22 @@ def test_load_settings_env_overrides_non_secret_fields(monkeypatch, tmp_path: Pa
     assert settings.port == 9191
 
 
+@pytest.mark.parametrize("host_override", ["", "   "])
+def test_load_settings_rejects_empty_or_whitespace_host_env_override(
+    monkeypatch,
+    tmp_path: Path,
+    host_override: str,
+):
+    monkeypatch.setattr("app.config.load_dotenv", lambda: None)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("HOST", host_override)
+    _write_config(tmp_path / "config" / "config.json", host="127.0.0.1")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="host"):
+        load_settings(is_frozen=False)
+
+
 def test_load_settings_reads_secret_from_openai_api_key_env_only(
     monkeypatch,
     tmp_path: Path,
