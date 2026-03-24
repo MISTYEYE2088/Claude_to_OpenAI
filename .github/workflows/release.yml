@@ -118,6 +118,7 @@ jobs:
           from pathlib import Path
 
           Path("config").mkdir(parents=True, exist_ok=True)
+          Path("dist/config").mkdir(parents=True, exist_ok=True)
           config = {
               "openai_api_key_env": "OPENAI_API_KEY",
               "upstream_openai_base_url": "http://127.0.0.1:18080/v1",
@@ -125,8 +126,10 @@ jobs:
               "host": "127.0.0.1",
               "port": 8181,
           }
-          Path("config/config.json").write_text(
-              json.dumps(config, indent=2) + "\n", encoding="utf-8"
+          serialized = json.dumps(config, indent=2) + "\n"
+          Path("config/config.json").write_text(serialized, encoding="utf-8")
+          Path("dist/config/config.json").write_text(
+              serialized, encoding="utf-8"
           )
           PY
 
@@ -203,6 +206,7 @@ jobs:
           export OPENAI_API_KEY="dummy"
           "./dist/${{ matrix.binary_name }}" > proxy.log 2>&1 &
           PROXY_PID=$!
+          export PROXY_PID
 
           cleanup() {
             kill "$PROXY_PID" "$FAKE_UPSTREAM_PID" 2>/dev/null || true
@@ -215,9 +219,52 @@ jobs:
           import time
           import urllib.request
 
+          models_url = "http://127.0.0.1:18080/v1/models"
+          deadline = time.time() + 20
+          while time.time() < deadline:
+              try:
+                  request = urllib.request.Request(models_url, method="GET")
+                  with urllib.request.urlopen(request, timeout=2) as response:
+                      if response.status == 200:
+                          payload = json.loads(response.read().decode("utf-8"))
+                          if isinstance(payload, dict) and isinstance(
+                              payload.get("data"), list
+                          ):
+                              break
+              except Exception:
+                  pass
+              time.sleep(0.5)
+          else:
+              raise SystemExit(
+                  "Fake upstream failed readiness check at /v1/models"
+              )
+          PY
+
+          python - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.request
+          import urllib.error
+
+          def process_alive(pid: int) -> bool:
+              import os
+              try:
+                  os.kill(pid, 0)
+              except OSError:
+                  return False
+              return True
+
           ready_url = "http://127.0.0.1:8181/ready"
           deadline = time.time() + 30
+          last_status = None
+          last_body = None
+          proxy_pid = int(os.environ["PROXY_PID"])
           while time.time() < deadline:
+              if not process_alive(proxy_pid):
+                  raise SystemExit(
+                      "Proxy process exited before readiness check"
+                  )
               try:
                   with urllib.request.urlopen(ready_url, timeout=2) as response:
                       if response.status == 200:
@@ -227,14 +274,34 @@ jobs:
                               and payload.get("status")
                           ):
                               break
+              except urllib.error.HTTPError as exc:
+                  last_status = exc.code
+                  try:
+                      last_body = exc.read().decode("utf-8")
+                  except Exception:
+                      last_body = None
               except Exception:
-                  pass
+                  last_status = None
+                  last_body = None
               time.sleep(0.5)
           else:
-              raise SystemExit("Proxy failed readiness check at /ready")
+              details = f"status={last_status} body={last_body!r}"
+              raise SystemExit(
+                  "Proxy failed readiness check at /ready (" + details + ")"
+              )
           PY
 
-          python scripts/compat_check.py --base-url http://127.0.0.1:8181
+          if [ -f fake-upstream.log ]; then
+            echo "--- fake-upstream.log ---"
+            cat fake-upstream.log
+          fi
+          if [ -f proxy.log ]; then
+            echo "--- proxy.log ---"
+            cat proxy.log
+          fi
+
+          python scripts/compat_check.py \
+            --base-url http://127.0.0.1:8181
 
       - name: Package release artifacts
         run: >-
