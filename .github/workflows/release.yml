@@ -15,15 +15,53 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install gitleaks
         run: |
           GITLEAKS_VERSION="8.24.2"
           GITLEAKS_TARBALL="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          GITLEAKS_CHECKSUMS="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
           GITLEAKS_URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${GITLEAKS_TARBALL}"
+          GITLEAKS_CHECKSUMS_URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${GITLEAKS_CHECKSUMS}"
           curl -sSL \
             "$GITLEAKS_URL" \
             -o gitleaks.tar.gz
+          curl -sSL \
+            "$GITLEAKS_CHECKSUMS_URL" \
+            -o gitleaks_checksums.txt
+          export GITLEAKS_TARBALL
+          python - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+          import sys
+
+          tarball_name = os.environ["GITLEAKS_TARBALL"]
+          checksums_path = pathlib.Path("gitleaks_checksums.txt")
+          tarball_path = pathlib.Path("gitleaks.tar.gz")
+
+          expected = None
+          for line in checksums_path.read_text(encoding="utf-8").splitlines():
+              parts = line.strip().split()
+              if (
+                  len(parts) >= 2
+                  and pathlib.Path(parts[-1]).name == tarball_name
+              ):
+                  expected = parts[0].lower()
+                  break
+
+          if expected is None:
+              raise SystemExit(f"Checksum not found for {tarball_name}")
+
+          actual = hashlib.sha256(tarball_path.read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit(
+                  "Checksum mismatch for "
+                  f"{tarball_name}: expected {expected}, got {actual}"
+              )
+          PY
           tar -xzf gitleaks.tar.gz gitleaks
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
           gitleaks version
