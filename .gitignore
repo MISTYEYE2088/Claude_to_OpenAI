@@ -7,3 +7,6 @@ build/
 dist/
 *.spec
 config/config.json
+.env
+.env.*
+!.env.example
