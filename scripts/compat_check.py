@@ -31,7 +31,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description=(
             "Verify Anthropic compatibility surface on /ready, /v1/models, and "
             "/v1/messages."
-        )
+        ),
+        epilog=(
+            "Required release security checks:\n"
+            "  gitleaks detect --source . --no-banner\n"
+            "  gitleaks git --no-banner"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     return parser.parse_args(argv)
