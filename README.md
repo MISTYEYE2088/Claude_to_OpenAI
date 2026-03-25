@@ -1,10 +1,15 @@
-# OpenAI to Claude Proxy
+# Claude Code OpenAI Proxy
 
-Anthropic-compatible local proxy that accepts Claude-style `/v1/messages` requests and forwards them to an OpenAI-compatible upstream API.
+Anthropic-compatible local proxy for running Claude Code against an OpenAI-compatible upstream API.
 
 ## Purpose
 
-This project provides a small compatibility layer so Anthropic-format clients can call an OpenAI-compatible backend through a Claude-style API surface.
+This project provides a compatibility layer so Claude Code and other Anthropic-format clients can call an OpenAI-compatible backend through a Claude-style API surface.
+
+It also supports:
+
+- Forced model override (`force_model`) so incoming model values are ignored and a configured `default_model` is always used.
+- Full query capture (`log_queries`) to write incoming `/v1/messages` payloads to `logs/queries.jsonl` for troubleshooting request-shape differences.
 
 ## Binary Usage
 

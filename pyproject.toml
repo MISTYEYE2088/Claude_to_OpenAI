@@ -1,7 +1,7 @@
 [project]
 name = "openai-to-claude-proxy"
 version = "0.1.0"
-description = "Anthropic-compatible API proxy to OpenAI-compatible upstream"
+description = "Claude Code-compatible proxy from Anthropic Messages API to OpenAI-compatible upstreams"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
