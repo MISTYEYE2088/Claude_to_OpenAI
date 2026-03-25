@@ -57,6 +57,15 @@ def test_models_success_maps_fields_and_fallbacks(make_test_client):
     assert fake_openai_client.model_calls == [{}]
 
 
+def test_ready_returns_ready_when_models_upstream_succeeds(make_test_client):
+    client, _ = make_test_client({}, models_behavior={"data": []})
+
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
 def test_models_upstream_api_error_maps_status_and_proxy_metadata(make_test_client):
     client, _ = make_test_client(
         {},
@@ -74,6 +83,26 @@ def test_models_upstream_api_error_maps_status_and_proxy_metadata(make_test_clie
         "type": "error",
         "error": {"type": "api_error", "message": "upstream unavailable"},
         "proxy": {"upstream_status": 503, "request_id": "req_models_1"},
+    }
+
+
+def test_ready_propagates_upstream_failure_contract(make_test_client):
+    client, _ = make_test_client(
+        {},
+        models_behavior=FakeUpstreamApiError(
+            status_code=503,
+            message="upstream unavailable",
+            request_id="req_ready_1",
+        ),
+    )
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "type": "error",
+        "error": {"type": "api_error", "message": "upstream unavailable"},
+        "proxy": {"upstream_status": 503, "request_id": "req_ready_1"},
     }
 
 

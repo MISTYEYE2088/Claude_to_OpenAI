@@ -101,6 +101,62 @@ def test_load_settings_env_overrides_non_secret_fields(monkeypatch, tmp_path: Pa
     assert settings.port == 9191
 
 
+def test_load_settings_reads_force_model_and_log_queries_from_json(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.setattr("app.config.load_dotenv", lambda: None)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    _write_config(
+        tmp_path / "config" / "config.json",
+        force_model=True,
+        log_queries=False,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    settings = load_settings(is_frozen=False)
+
+    assert settings.force_model is True
+    assert settings.log_queries is False
+
+
+def test_load_settings_env_overrides_force_model_and_log_queries(
+    monkeypatch, tmp_path: Path
+):
+    monkeypatch.setattr("app.config.load_dotenv", lambda: None)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("FORCE_MODEL", "0")
+    monkeypatch.setenv("LOG_QUERIES", "true")
+    _write_config(
+        tmp_path / "config" / "config.json",
+        force_model=True,
+        log_queries=False,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    settings = load_settings(is_frozen=False)
+
+    assert settings.force_model is False
+    assert settings.log_queries is True
+
+
+@pytest.mark.parametrize("env_name", ["FORCE_MODEL", "LOG_QUERIES"])
+def test_load_settings_rejects_invalid_boolean_env_values(
+    monkeypatch, tmp_path: Path, env_name: str
+):
+    monkeypatch.setattr("app.config.load_dotenv", lambda: None)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv(env_name, "maybe")
+    _write_config(
+        tmp_path / "config" / "config.json",
+        force_model=False,
+        log_queries=False,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match=env_name):
+        load_settings(is_frozen=False)
+
+
 @pytest.mark.parametrize("host_override", ["", "   "])
 def test_load_settings_rejects_empty_or_whitespace_host_env_override(
     monkeypatch,
@@ -156,6 +212,23 @@ def test_load_settings_empty_default_model_normalizes_to_none(
     settings = load_settings(is_frozen=False)
 
     assert settings.default_model is None
+
+
+def test_load_settings_fails_when_force_model_true_and_default_model_missing(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr("app.config.load_dotenv", lambda: None)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    _write_config(
+        tmp_path / "config" / "config.json",
+        force_model=True,
+        default_model="   ",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(ValueError, match="default_model.*force_model"):
+        load_settings(is_frozen=False)
 
 
 def test_load_settings_ignores_unknown_json_keys(monkeypatch, tmp_path: Path):

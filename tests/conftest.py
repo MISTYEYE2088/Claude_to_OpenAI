@@ -11,6 +11,11 @@ from app.config import Settings
 from app.main import app, get_openai_client, get_settings
 
 
+@pytest.fixture(autouse=True)
+def _safe_openai_api_key_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+
 class FakeUpstreamApiError(Exception):
     def __init__(
         self,
