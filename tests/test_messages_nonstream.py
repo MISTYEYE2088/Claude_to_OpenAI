@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app, get_openai_client, get_settings
@@ -216,9 +218,58 @@ def test_route_allows_missing_max_tokens(make_test_client):
     assert "max_tokens" not in fake_openai_client.calls[0]
 
 
-def test_route_uses_hard_default_model_when_missing(make_test_client):
+def test_route_force_model_overrides_incoming_model(settings):
+    settings_with_forced_model = settings.__class__(
+        openai_api_key=settings.openai_api_key,
+        upstream_openai_base_url=settings.upstream_openai_base_url,
+        default_model="configured-model",
+        host=settings.host,
+        port=settings.port,
+        force_model=True,
+        log_queries=settings.log_queries,
+    )
     upstream_response = {
-        "id": "chatcmpl-hard-default-model-missing",
+        "id": "chatcmpl-force-model-override",
+        "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+    }
+
+    try:
+        fake_openai_client = FakeOpenAIClient(upstream_response)
+        app.dependency_overrides[get_settings] = lambda: settings_with_forced_model
+        app.dependency_overrides[get_openai_client] = lambda: fake_openai_client
+        client = TestClient(app)
+
+        response = client.post(
+            "/v1/messages",
+            json={
+                "model": "incoming-model-should-be-ignored",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["model"] == "configured-model"
+    assert fake_openai_client.calls[0]["model"] == "configured-model"
+
+
+@pytest.mark.parametrize(
+    "model_payload",
+    [
+        {},
+        {"model": None},
+        {"model": ""},
+        {"model": "   "},
+        {"model": 123},
+    ],
+)
+def test_route_returns_canonical_400_for_all_nonforce_no_model_variants(
+    make_test_client, model_payload
+):
+    upstream_response = {
+        "id": "chatcmpl-nonforce-no-model",
         "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 2},
     }
@@ -227,76 +278,17 @@ def test_route_uses_hard_default_model_when_missing(make_test_client):
     response = client.post(
         "/v1/messages",
         json={
+            **model_payload,
             "messages": [{"role": "user", "content": "hello"}],
         },
     )
 
-    assert response.status_code == 200
-    assert response.json()["model"] == "gpt-5.3-codex"
-    assert fake_openai_client.calls[0]["model"] == "gpt-5.3-codex"
-
-
-def test_route_uses_hard_default_model_when_null(make_test_client):
-    upstream_response = {
-        "id": "chatcmpl-hard-default-model-null",
-        "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
-        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+    assert response.status_code == 400
+    assert response.json()["error"] == {
+        "type": "invalid_request_error",
+        "message": "model is required (set payload.model or config default_model)",
     }
-    client, fake_openai_client = make_test_client(upstream_response)
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": None,
-            "messages": [{"role": "user", "content": "hello"}],
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["model"] == "gpt-5.3-codex"
-    assert fake_openai_client.calls[0]["model"] == "gpt-5.3-codex"
-
-
-def test_route_uses_hard_default_model_when_empty_string(make_test_client):
-    upstream_response = {
-        "id": "chatcmpl-hard-default-model-empty",
-        "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
-        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
-    }
-    client, fake_openai_client = make_test_client(upstream_response)
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": "",
-            "messages": [{"role": "user", "content": "hello"}],
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["model"] == "gpt-5.3-codex"
-    assert fake_openai_client.calls[0]["model"] == "gpt-5.3-codex"
-
-
-def test_route_uses_hard_default_model_when_non_string(make_test_client):
-    upstream_response = {
-        "id": "chatcmpl-hard-default-model-non-string",
-        "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
-        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
-    }
-    client, fake_openai_client = make_test_client(upstream_response)
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": 123,
-            "messages": [{"role": "user", "content": "hello"}],
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["model"] == "gpt-5.3-codex"
-    assert fake_openai_client.calls[0]["model"] == "gpt-5.3-codex"
+    assert fake_openai_client.calls == []
 
 
 def test_route_uses_configured_default_model_when_caller_model_is_invalid(settings):
@@ -366,6 +358,134 @@ def test_route_rejects_non_array_messages(make_test_client):
         "type": "invalid_request_error",
         "message": "messages must be an array",
     }
+
+
+def test_route_logs_full_payload_to_queries_jsonl_when_enabled(
+    settings, tmp_path, monkeypatch
+):
+    settings_with_query_logging = settings.__class__(
+        openai_api_key=settings.openai_api_key,
+        upstream_openai_base_url=settings.upstream_openai_base_url,
+        default_model=settings.default_model,
+        host=settings.host,
+        port=settings.port,
+        force_model=settings.force_model,
+        log_queries=True,
+    )
+    request_payload = {
+        "model": "gpt-5.3-codex",
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {"n": 1, "text": "caf\u00e9"},
+    }
+    upstream_response = {
+        "id": "chatcmpl-log-full-payload",
+        "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+    }
+
+    monkeypatch.chdir(tmp_path)
+
+    try:
+        fake_openai_client = FakeOpenAIClient(upstream_response)
+        app.dependency_overrides[get_settings] = lambda: settings_with_query_logging
+        app.dependency_overrides[get_openai_client] = lambda: fake_openai_client
+        client = TestClient(app)
+        response = client.post("/v1/messages", json=request_payload)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    log_path = tmp_path / "logs" / "queries.jsonl"
+    assert log_path.exists()
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+
+    record = json.loads(lines[0])
+    assert record["path"] == "/v1/messages"
+    assert record["payload"] == request_payload
+    assert isinstance(record["timestamp"], str)
+    assert record["timestamp"].endswith("Z")
+    assert "caf\\u00e9" in lines[0]
+
+
+def test_route_logging_failure_does_not_fail_request(settings, monkeypatch, tmp_path):
+    settings_with_query_logging = settings.__class__(
+        openai_api_key=settings.openai_api_key,
+        upstream_openai_base_url=settings.upstream_openai_base_url,
+        default_model=settings.default_model,
+        host=settings.host,
+        port=settings.port,
+        force_model=settings.force_model,
+        log_queries=True,
+    )
+    upstream_response = {
+        "id": "chatcmpl-log-failure",
+        "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+    }
+    open_called = {"value": False}
+
+    original_open = type(tmp_path).open
+
+    def failing_open(path_obj, *args, **kwargs):
+        if path_obj.name == "queries.jsonl":
+            open_called["value"] = True
+            raise OSError("simulated log write failure")
+        return original_open(path_obj, *args, **kwargs)
+
+    monkeypatch.setattr(type(tmp_path), "open", failing_open)
+    monkeypatch.chdir(tmp_path)
+
+    try:
+        fake_openai_client = FakeOpenAIClient(upstream_response)
+        app.dependency_overrides[get_settings] = lambda: settings_with_query_logging
+        app.dependency_overrides[get_openai_client] = lambda: fake_openai_client
+        client = TestClient(app)
+        response = client.post(
+            "/v1/messages",
+            json={
+                "model": "gpt-5.3-codex",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert open_called["value"] is True
+    assert response.status_code == 200
+
+
+def test_route_logs_before_field_validation(settings, tmp_path, monkeypatch):
+    settings_with_query_logging = settings.__class__(
+        openai_api_key=settings.openai_api_key,
+        upstream_openai_base_url=settings.upstream_openai_base_url,
+        default_model=settings.default_model,
+        host=settings.host,
+        port=settings.port,
+        force_model=settings.force_model,
+        log_queries=True,
+    )
+    request_payload = {"model": "gpt-5.3-codex"}
+
+    monkeypatch.chdir(tmp_path)
+
+    try:
+        fake_openai_client = FakeOpenAIClient({})
+        app.dependency_overrides[get_settings] = lambda: settings_with_query_logging
+        app.dependency_overrides[get_openai_client] = lambda: fake_openai_client
+        client = TestClient(app)
+        response = client.post("/v1/messages", json=request_payload)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == "messages is required"
+
+    log_path = tmp_path / "logs" / "queries.jsonl"
+    assert log_path.exists()
+    record = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+    assert record["path"] == "/v1/messages"
+    assert record["payload"] == request_payload
 
 
 def test_route_forwards_zero_max_tokens(make_test_client):

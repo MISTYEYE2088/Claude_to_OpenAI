@@ -19,6 +19,8 @@ class Settings:
     default_model: str | None = None
     host: str = "127.0.0.1"
     port: int = 8181
+    force_model: bool = False
+    log_queries: bool = False
 
 
 def _parse_port(raw_port: str | int) -> int:
@@ -56,6 +58,20 @@ def _parse_host(raw_host: str) -> str:
         raise ValueError("host must be a non-empty string")
 
     return normalized
+
+
+def _parse_bool(raw: object, *, field_name: str) -> bool:
+    if isinstance(raw, bool):
+        return raw
+
+    if isinstance(raw, str):
+        value = raw.strip().lower()
+        if value in {"true", "1"}:
+            return True
+        if value in {"false", "0"}:
+            return False
+
+    raise ValueError(f"{field_name} must be true/false/1/0")
 
 
 def _parse_upstream_openai_base_url(raw_url: str) -> str:
@@ -147,6 +163,23 @@ def load_settings(
         raise ValueError("host must be a non-empty string")
 
     raw_port = config_payload.get("port", 8181)
+    raw_force_model = config_payload.get("force_model", False)
+    raw_log_queries = config_payload.get("log_queries", False)
+
+    force_model_env = os.getenv("FORCE_MODEL")
+    log_queries_env = os.getenv("LOG_QUERIES")
+
+    if force_model_env is not None:
+        raw_force_model = force_model_env
+        force_model_name = "FORCE_MODEL"
+    else:
+        force_model_name = "force_model"
+
+    if log_queries_env is not None:
+        raw_log_queries = log_queries_env
+        log_queries_name = "LOG_QUERIES"
+    else:
+        log_queries_name = "log_queries"
 
     upstream_openai_base_url = os.getenv(
         "UPSTREAM_OPENAI_BASE_URL", upstream_openai_base_url
@@ -159,12 +192,20 @@ def load_settings(
     if not api_key:
         raise ValueError(f"{openai_api_key_env} is required")
 
+    parsed_default_model = _parse_default_model(default_model)
+    parsed_force_model = _parse_bool(raw_force_model, field_name=force_model_name)
+
+    if parsed_force_model and parsed_default_model is None:
+        raise ValueError("default_model is required when force_model is true")
+
     return Settings(
         openai_api_key=api_key,
         upstream_openai_base_url=_parse_upstream_openai_base_url(
             upstream_openai_base_url
         ),
-        default_model=_parse_default_model(default_model),
+        default_model=parsed_default_model,
         host=_parse_host(host),
         port=_parse_port(raw_port),
+        force_model=parsed_force_model,
+        log_queries=_parse_bool(raw_log_queries, field_name=log_queries_name),
     )

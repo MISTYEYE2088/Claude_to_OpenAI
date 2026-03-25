@@ -11,3 +11,4 @@ config/config.json
 .env.*
 !.env.example
 uv.lock
+logs/

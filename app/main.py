@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -26,6 +28,11 @@ from app.translate import (
 from app.streaming import openai_stream_to_anthropic_events
 
 app = FastAPI(title="OpenAI to Claude Proxy")
+
+
+@app.on_event("startup")
+async def _validate_settings_on_startup() -> None:
+    get_settings()
 
 
 @lru_cache(maxsize=1)
@@ -167,13 +174,18 @@ def _validate_request_payload(payload: Any) -> str | None:
     return None
 
 
-def _resolve_model(payload: dict[str, Any], settings: Settings) -> str:
+def _resolve_model(payload: dict[str, Any], settings: Settings) -> str | None:
+    if settings.force_model:
+        return settings.default_model
+
     caller_model = payload.get("model")
     if isinstance(caller_model, str) and caller_model.strip():
         return caller_model
+
     if settings.default_model:
         return settings.default_model
-    return "gpt-5.3-codex"
+
+    return None
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:
@@ -256,6 +268,18 @@ def _map_models_response(upstream_response: Any) -> dict[str, list[dict[str, str
     return {"data": mapped}
 
 
+def _append_query_log(payload: dict[str, Any], path: str = "/v1/messages") -> None:
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "path": path,
+        "payload": payload,
+    }
+    log_path = Path.cwd() / "logs" / "queries.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as log_file:
+        log_file.write(json.dumps(record, ensure_ascii=True) + "\n")
+
+
 def _fetch_and_map_models(client: Any) -> tuple[int, dict]:
     try:
         upstream_response = client.models.list()
@@ -294,12 +318,24 @@ async def messages(
         status, body = local_validation_error("Request body must be valid JSON")
         return _json_error_response(status, body)
 
+    if settings.log_queries and isinstance(payload, dict):
+        try:
+            _append_query_log(payload)
+        except Exception:
+            pass
+
     validation_error = _validate_request_payload(payload)
     if validation_error is not None:
         status, body = local_validation_error(validation_error)
         return _json_error_response(status, body)
 
     resolved_model = _resolve_model(payload, settings)
+    if resolved_model is None:
+        status, body = local_validation_error(
+            "model is required (set payload.model or config default_model)"
+        )
+        return _json_error_response(status, body)
+
     normalized_payload = dict(payload)
     normalized_payload["model"] = resolved_model
 
